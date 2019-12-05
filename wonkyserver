@@ -1,0 +1,195 @@
+#!/usr/bin/env python
+
+from BaseHTTPServer import BaseHTTPRequestHandler, HTTPServer
+
+import httplib
+import tempfile
+import os
+import re
+import sys
+
+import Image
+import ImageFilter
+import ImageOps
+
+# A list of regular expressions to match URLs against, and the
+# corresponding action to take:
+
+if len(sys.argv) < 2:
+    print("Usage: " + sys.argv[0] + "\n" +
+            "vflip # Upsidedownternet\n" +
+            "hflip # LeftRighternet\n" +
+            "blur # Oldernet\n" +
+            "contour # Pencil drawternet\n" +
+            "gray # Colorblindernet\n" +
+            "invert # Nagativernet\n"
+    )
+    sys.exit(1)
+
+# Perform the requested operation:
+if sys.argv[1] == 'vflip':
+    print ""
+elif sys.argv[1] == 'hflip':
+    print ""
+elif sys.argv[1] == 'blur':
+    print ""
+elif sys.argv[1] == 'contour':
+    print ""
+elif sys.argv[1] == 'gray':
+    print ""
+elif sys.argv[1] == 'invert':
+    print ""
+else:
+    print "Invalid action: " + sys.argv[1] + ". Doing nothing with this image"
+    sys.exit(1)
+
+actions = {}
+actions[ '(.*\.gif|.*\.jpe?g|.*\.png)' ]  = 'image.' + sys.argv[1]
+#actions[ '.*\.htm.*'                   ]  = 'text.replace.FOO.BAR'
+#actions[ '.*exe'                       ]  = 'sendfile./path/to/file.exe'
+
+# If none of the above regular expressions match the path, apply
+# this action:
+
+default_action = "none"
+
+
+# Don't edit anything below this line
+#-----------------------------------------------------------------------
+
+
+# The number of GET requests we have serviced
+
+get_count = 0
+
+
+# Gets the action to take based on the request string:
+
+def get_action( str ):
+     for regex in regexes.keys():
+         if regex.match( str ):
+             return regexes[ regex ]
+     return default_action;
+
+# The HTTP server that does the grunt work:
+class WonkyHandler(BaseHTTPRequestHandler):
+
+    def do_GET(self):
+
+        global get_count
+        get_count += 1
+
+        print "request", str(get_count) + ":", self.path
+
+        # GET requests should look like this: /operation/host/path
+        # where "operation" can be vflip, hflip, blur, etc.
+        request = self.path.split( '/', 2 )
+
+        if len(request) != 3:
+            self.wfile.write( "HTTP/1.x 200 OK\r\n" )
+            self.wfile.write( "\r\n" )
+            self.wfile.write( "Bad request. The request should look like this: /www.example.com/path/to/file.jpg" )
+            return
+
+        host = request[1]
+        path = "/" + request[2]
+
+        # Fetch the image from the remote (real) server:
+        httpclient = httplib.HTTPConnection( host )
+        httpclient.request( "GET", path )
+        response = httpclient.getresponse()
+
+        print "remote response:", response.status, response.reason
+
+        # For errors (like 404), just replay the error back to the browser:
+        if response.status != 200:
+             self.wfile.write( response.read() )
+             return
+
+        # Figure out what to do with this image, based on the user's configuration:
+        action = get_action( self.path );
+
+        print "applying action:", action
+
+        if action.startswith( "image" ):
+
+            # Save the image to disk so the Python Imaging Library can use it:
+            tmpfile = tempfile.mktemp( ".wonky" )
+            f = open( tmpfile, 'w' )
+            f.write( response.read() )
+            f.close()
+
+            # Create a Python Imaging Library image object:
+            image = Image.open( tmpfile ).convert( "RGB" )
+            os.remove( tmpfile )
+
+            # Perform the requested operation:
+            if action == 'image.vflip':
+                image = image.rotate( 180 )
+            elif action == 'image.hflip':
+                image = image.transpose( Image.FLIP_LEFT_RIGHT )
+            elif action == 'image.blur':
+                image = image.filter( ImageFilter.BLUR )
+                image = image.filter( ImageFilter.BLUR )
+                image = image.filter( ImageFilter.BLUR )
+            elif action == 'image.contour':
+                image = image.filter( ImageFilter.CONTOUR )
+            elif action == 'image.gray':
+                image = ImageOps.grayscale( image )
+            elif action == 'image.invert':
+                image = ImageOps.invert( image )
+            else:
+                print "Invalid action: " + action + ". Doing nothing with this image"
+
+            # Save the changed image to disk:
+            tmpimg = tempfile.mktemp( ".wonky.jpg" )
+            image.save( tmpimg )
+
+            # Send the changed image to the client as a JPEG:
+            f = open( tmpimg, 'r' )
+            self.wfile.write( "HTTP/1.x 200 OK\r\n" )
+            self.wfile.write( "\r\n" )
+            self.wfile.write( f.read() )
+            f.close()
+            os.remove( tmpimg )
+
+        elif action.startswith( "text" ):
+
+             text = response.read()
+
+             if action.startswith( "text.replace" ):
+                 tmp = action.replace( "text.replace.", "" ).split( '.', 1 )
+                 if len(tmp) == 2:
+                     replace = tmp[0]
+                     with0 = tmp[1]
+                     print "Replacing", replace, "with", with0
+                     text = text.replace( replace, with0 )
+                 else:
+                     print "Bad text.replace action. It should look like: text.replace.foo.bar (to replace 'foo' with 'bar')"
+
+             self.wfile.write( "HTTP/1.x 200 OK\r\n" )
+             self.wfile.write( "\r\n" )
+             self.wfile.write( text )
+
+        elif action.startswith( "sendfile" ):
+
+             # TODO Implement this garbage
+             print "This doesn't work yet"
+
+# Main:
+
+port = 8080
+
+regexes = {}
+for key in actions.keys():
+     regex = re.compile( key )
+     action = actions[ key ]
+     regexes[ regex ] = action
+
+try:
+    print "Listening on port " + str(port)
+    wonkyServer = HTTPServer(('', port), WonkyHandler)
+    wonkyServer.serve_forever()
+except KeyboardInterrupt:
+    wonkyServer.socket.close()
+
